@@ -3,8 +3,8 @@
 import os
 import json
 import numpy as np
-import google.generativeai as genai
-from google.generativeai import types
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 from sklearn.cluster import DBSCAN
 import sqlite3
@@ -105,10 +105,10 @@ def setup_gemini():
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
         raise ValueError("错误：未找到GOOGLE_API_KEY。请确保您的.env文件配置正确。")
-    genai.configure(api_key=api_key)
+
     print("Gemini 环境配置成功。")
 
-def get_app_description(model: genai.GenerativeModel, app_name: str, package_name: str) -> str:
+def get_app_description(client: genai.Client, app_name: str, package_name: str) -> str:
     """
     第一步：根据应用名和包名，使用LLM生成一系列功能标签。
     """
@@ -174,7 +174,10 @@ def get_app_description(model: genai.GenerativeModel, app_name: str, package_nam
     """
     
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
         tags = response.text.strip()
         if not tags:
             return "信息不足"
@@ -183,13 +186,16 @@ def get_app_description(model: genai.GenerativeModel, app_name: str, package_nam
         print(f"    ! 调用LLM生成标签时出错: {e}")
         return "信息不足"
 
-def get_embedding(text: str) -> list[float] | None:
+def get_embedding(client: genai.Client, text: str) -> list[float] | None:
     """
     第二步：将标签字符串通过Embedding模型转换为向量。
     """
     print(f"  > 正在为标签 \"{text[:20]}...\" 生成向量...")
     try:
-        result = genai.embed_content(model="models/text-embedding-004", content=text)
+        result = client.models.embed_content(
+            model="text-embedding-004",
+            contents=text
+        )
         return result['embedding']
     except Exception as e:
         print(f"    ! 调用Embedding模型时出错: {e}")
@@ -216,8 +222,9 @@ def main():
     if not apps_to_process:
         print("数据库中没有找到有效的应用信息，程序终止。")
         return
-
-    generative_model = genai.GenerativeModel('gemini-2.0-flash')
+    
+    # 初始化新的客户端
+    client = genai.Client()
     
     print("\n--- 开始处理应用列表 ---")
 
@@ -240,7 +247,7 @@ def main():
             print(f"  > [缓存命中] 从缓存加载标签。")
         else:
             # 缓存未命中，调用API
-            tags = get_app_description(generative_model, app_name, package_name)
+            tags = get_app_description(client, app_name, package_name)
             # 将新结果存入缓存字典
             app_tags_cache[package_name] = tags
             # 修改点：每次查询到新结果后，立即写入缓存
@@ -255,7 +262,7 @@ def main():
         app['tags'] = tags
 
         # --- 步骤 3: 生成向量 ---
-        vector = get_embedding(tags)
+        vector = get_embedding(client, tags)
         if vector:
             processed_apps.append(app)
             app_vectors.append(vector)
